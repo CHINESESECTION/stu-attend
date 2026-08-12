@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#07203f">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Student Scanner">
+<meta name="apple-mobile-web-app-title" content="UG Pass">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon.svg">
 <title>UG Attendance Pass — University of Ghana</title>
@@ -487,8 +487,27 @@ var app = (function(){
   function idbPut(k,v){ return new Promise(function(res){ if(!DB){res();return;} var t=DB.transaction("kv","readwrite"); t.objectStore("kv").put(v,k); t.oncomplete=function(){res();}; t.onerror=function(){res();}; }); }
 
   /* ---------- Firebase (attendance data only; photos are NEVER written) ---------- */
-  function fbGet(p){ return fetch(FB + p + ".json?auth=" + encodeURIComponent(SECRET)).then(function(r){ if(!r.ok) return null; return r.json(); }); }
-  function fbPut(p, obj){ return fetch(FB + p + ".json?auth=" + encodeURIComponent(SECRET), { method:"PUT", headers:{"Content-Type":"application/json"}, body: JSON.stringify(obj) }).then(function(r){ if(!r.ok) throw new Error("FB PUT "+r.status); return r.json(); }); }
+  /* Every Firebase call is time-boxed so a stalled mobile connection can NEVER hang
+     the UI (a bare fetch can stay "pending" forever; we abort it instead). */
+  var FB_TIMEOUT = 15000;
+  function fbGet(p){
+    var ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
+    var opt = ctrl ? { signal: ctrl.signal } : undefined;
+    var to = ctrl ? new Promise(function(_, rej){ setTimeout(function(){ rej(new Error("timeout")); }, FB_TIMEOUT); }) : null;
+    var req = fetch(FB + p + ".json?auth=" + encodeURIComponent(SECRET), opt)
+      .then(function(r){ if(!r || !r.ok) return null; return r.json(); });
+    var guarded = to ? Promise.race([req, to]) : req;
+    return guarded.catch(function(){ return null; });   /* on error/timeout -> treat as no data */
+  }
+  function fbPut(p, obj){
+    var ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
+    var opt = { method:"PUT", headers:{"Content-Type":"application/json"}, body: JSON.stringify(obj) };
+    if(ctrl) opt.signal = ctrl.signal;
+    var to = ctrl ? new Promise(function(_, rej){ setTimeout(function(){ rej(new Error("timeout")); }, FB_TIMEOUT); }) : null;
+    var req = fetch(FB + p + ".json?auth=" + encodeURIComponent(SECRET), opt)
+      .then(function(r){ if(!r.ok) throw new Error("FB PUT "+r.status); return r.json(); });
+    return to ? Promise.race([req, to]) : req;
+  }
 
   /* ---------- helpers ---------- */
   function $(id){ return document.getElementById(id); }
@@ -670,42 +689,48 @@ var app = (function(){
     if(refreshTimer) clearInterval(refreshTimer);
     refreshTimer = setInterval(function(){ if(navigator.onLine && document.visibilityState==="visible") refresh(); }, 300000); /* AUTO-REFRESH EVERY 5 MINUTES */
   }
+  var refreshing=false;
   async function refresh(){
-    if(!profile) return;
+    if(!profile || refreshing) return;
+    refreshing=true;
     setLive(true);
     var btn=$("refreshBtn"); if(btn) btn.classList.add("spin");
     var prevSig = lastAtt ? sig(lastAtt) : null;
     try {
-      var metaAll=await fbGet("/studentsMeta");
-      if(metaAll){
-        var m=metaAll[profile.index];
-        if(m){ profile.level=m.level; profile.semester=m.semester; profile.academicYear=m.academicYear||""; profile.teacherName=m.name||""; await idbPut("profile", profile); renderHero(); }
+      try {
+        var metaAll=await fbGet("/studentsMeta");
+        if(metaAll){
+          var m=metaAll[profile.index];
+          if(m){ profile.level=m.level; profile.semester=m.semester; profile.academicYear=m.academicYear||""; profile.teacherName=m.name||""; await idbPut("profile", profile); renderHero(); }
+        }
+      } catch(e){}
+      try { termInfo = await fbGet("/academicYear"); if(!termInfo) termInfo={}; await idbPut("termInfo", termInfo); } catch(e){ termInfo = termInfo || (await idbGet("termInfo")) || {}; }
+      try {
+        var att=await fbGet("/attendance/"+profile.index);
+        if(att){
+          var newSig = sig(att);
+          if(prevSig!==null && newSig!==prevSig){ notifyChange(att); }   /* attendance changed -> local notification */
+          lastAtt=att; await idbPut("attendance", att); prevAttSig=newSig;
+        }
+        else { att = lastAtt || await idbGet("attendance"); }
+        renderDash(att);
+        var hasData = att && Object.keys(att).filter(function(k){return k!=="secret";}).length;
+        lastSynced = Date.now();
+        updateFooter();
+        await checkAnnouncements();
+        await checkMessages();
+        setLive(false, hasData ? "Live" : "No data");
+        if(navigator.onLine && hasData) toast("Attendance refreshed");
+      } catch(e){
+        var cached = lastAtt || await idbGet("attendance");
+        renderDash(cached);
+        updateFooter(true);
+        setLive(false, "Offline");
       }
-    } catch(e){}
-    try { termInfo = await fbGet("/academicYear"); if(!termInfo) termInfo={}; await idbPut("termInfo", termInfo); } catch(e){ termInfo = termInfo || (await idbGet("termInfo")) || {}; }
-    try {
-      var att=await fbGet("/attendance/"+profile.index);
-      if(att){
-        var newSig = sig(att);
-        if(prevSig!==null && newSig!==prevSig){ notifyChange(att); }   /* attendance changed -> local notification */
-        lastAtt=att; await idbPut("attendance", att); prevAttSig=newSig;
-      }
-      else { att = lastAtt || await idbGet("attendance"); }
-      renderDash(att);
-      var hasData = att && Object.keys(att).filter(function(k){return k!=="secret";}).length;
-      lastSynced = Date.now();
-      updateFooter();
-      await checkAnnouncements();
-      await checkMessages();
-      setLive(false, hasData ? "Live" : "No data");
-      if(navigator.onLine && hasData) toast("Attendance refreshed");
-    } catch(e){
-      var cached = lastAtt || await idbGet("attendance");
-      renderDash(cached);
-      updateFooter(true);
-      setLive(false, "Offline");
+    } finally {
+      refreshing=false;
+      if(btn) btn.classList.remove("spin");   /* never leave it spinning */
     }
-    if(btn) btn.classList.remove("spin");
   }
   function updateFooter(offline){
     var el=$("syncFooter"); if(!el) return;
