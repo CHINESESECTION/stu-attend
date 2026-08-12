@@ -313,7 +313,7 @@
       <input type="password" id="pinEnter" inputmode="numeric" maxlength="5" placeholder="•••••">
       <div class="err" id="unlockErr"></div>
       <button class="btn btn-blue" onclick="app.unlock()">Unlock</button>
-      <button class="btn btn-ghost" onclick="app.forgotPin()">Forgot PIN</button>
+      <button class="btn btn-ghost" onclick="app.resetApp()">Clear this device</button>
     </div></div>
   </div>
 
@@ -436,8 +436,8 @@
   <div class="sheet-item" onclick="app.showAbout(); app.closeMenu();">
     <div class="si">ℹ️</div><div>About this app</div>
   </div>
-  <div class="sheet-item" onclick="app.forgotPin(); app.closeMenu();">
-    <div class="si">🔑</div><div>Forgot PIN</div>
+  <div class="sheet-item" onclick="app.resetApp(); app.closeMenu();">
+    <div class="si">🗑️</div><div>Clear this device</div>
   </div>
 </div>
 
@@ -488,27 +488,8 @@ var app = (function(){
   function idbPut(k,v){ return new Promise(function(res){ if(!DB){res();return;} var t=DB.transaction("kv","readwrite"); t.objectStore("kv").put(v,k); t.oncomplete=function(){res();}; t.onerror=function(){res();}; }); }
 
   /* ---------- Firebase (attendance data only; photos are NEVER written) ---------- */
-  /* Every Firebase call is time-boxed so a stalled mobile connection can NEVER hang
-     the UI (a bare fetch can stay "pending" forever; we abort it instead). */
-  var FB_TIMEOUT = 15000;
-  function fbGet(p){
-    var ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
-    var opt = ctrl ? { signal: ctrl.signal } : undefined;
-    var to = ctrl ? new Promise(function(_, rej){ setTimeout(function(){ rej(new Error("timeout")); }, FB_TIMEOUT); }) : null;
-    var req = fetch(FB + p + ".json?auth=" + encodeURIComponent(SECRET), opt)
-      .then(function(r){ if(!r || !r.ok) return null; return r.json(); });
-    var guarded = to ? Promise.race([req, to]) : req;
-    return guarded.catch(function(){ return null; });   /* on error/timeout -> treat as no data */
-  }
-  function fbPut(p, obj){
-    var ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
-    var opt = { method:"PUT", headers:{"Content-Type":"application/json"}, body: JSON.stringify(obj) };
-    if(ctrl) opt.signal = ctrl.signal;
-    var to = ctrl ? new Promise(function(_, rej){ setTimeout(function(){ rej(new Error("timeout")); }, FB_TIMEOUT); }) : null;
-    var req = fetch(FB + p + ".json?auth=" + encodeURIComponent(SECRET), opt)
-      .then(function(r){ if(!r.ok) throw new Error("FB PUT "+r.status); return r.json(); });
-    return to ? Promise.race([req, to]) : req;
-  }
+  function fbGet(p){ return fetch(FB + p + ".json?auth=" + encodeURIComponent(SECRET)).then(function(r){ if(!r.ok) return null; return r.json(); }); }
+  function fbPut(p, obj){ return fetch(FB + p + ".json?auth=" + encodeURIComponent(SECRET), { method:"PUT", headers:{"Content-Type":"application/json"}, body: JSON.stringify(obj) }).then(function(r){ if(!r.ok) throw new Error("FB PUT "+r.status); return r.json(); }); }
 
   /* ---------- helpers ---------- */
   function $(id){ return document.getElementById(id); }
@@ -536,11 +517,6 @@ var app = (function(){
   function weekDate(startISO, weekNum){ var s=new Date(startISO); if(isNaN(s.getTime())) return null; var d=new Date(s); d.setDate(d.getDate()+(weekNum-1)*7); return d; }
   function fmtDate(d){ if(!d||isNaN(d.getTime())) return ""; return d.toLocaleDateString("en-GB",{day:"numeric",month:"short"}); }
   function totalWeeks(){ return (termInfo && termInfo.totalWeeks) ? parseInt(termInfo.totalWeeks,10) : 13; }
-  function isPastWeek(code, w){
-    var start=courseStart(code); if(!start) return false;
-    var d=weekDate(start, w); if(!d) return false;
-    return d.getTime() < Date.now();
-  }
   function setLive(busy, text){
     var chip=$("liveChip"); if(!chip) return;
     chip.className = "live" + (busy ? " busy" : "");
@@ -554,7 +530,7 @@ var app = (function(){
     var p1=$("pin1").value, p2=$("pin2").value;
     if(!/^\d{5}$/.test(p1)){ $("pinErr").innerText="PIN must be exactly 5 digits."; return; }
     if(p1!==p2){ $("pinErr").innerText="PINs do not match."; return; }
-    idbPut("pin", hashPin(p1)).then(function(){ toast("PIN created"); idbGet("profile").then(function(pf){ if(pf){ profile=pf; openDashboard(); } else { startRegister(); } }); });
+    idbPut("pin", hashPin(p1)).then(function(){ toast("PIN created"); startRegister(); });
   }
   function unlock(){
     var p=$("pinEnter").value;
@@ -564,9 +540,9 @@ var app = (function(){
       } else { $("unlockErr").innerText="Incorrect PIN."; }
     });
   }
-  function forgotPin(){
-    if(confirm("Forgot your PIN? This clears the PIN on this phone only so you can set a new one. Your profile, courses and attendance stay on this device.")){
-      idbPut("pin", null).then(function(){ show("scr-pinsetup"); });
+  function resetApp(){
+    if(confirm("Clear this device? This removes your PIN and profile from this phone only. Your attendance stays safe in the teacher system.")){
+      idbPut("pin", null).then(function(){ return idbPut("profile", null); }).then(function(){ show("scr-pinsetup"); });
     }
   }
 
@@ -690,48 +666,42 @@ var app = (function(){
     if(refreshTimer) clearInterval(refreshTimer);
     refreshTimer = setInterval(function(){ if(navigator.onLine && document.visibilityState==="visible") refresh(); }, 300000); /* AUTO-REFRESH EVERY 5 MINUTES */
   }
-  var refreshing=false;
   async function refresh(){
-    if(!profile || refreshing) return;
-    refreshing=true;
+    if(!profile) return;
     setLive(true);
     var btn=$("refreshBtn"); if(btn) btn.classList.add("spin");
     var prevSig = lastAtt ? sig(lastAtt) : null;
     try {
-      try {
-        var metaAll=await fbGet("/studentsMeta");
-        if(metaAll){
-          var m=metaAll[profile.index];
-          if(m){ profile.level=m.level; profile.semester=m.semester; profile.academicYear=m.academicYear||""; profile.teacherName=m.name||""; await idbPut("profile", profile); renderHero(); }
-        }
-      } catch(e){}
-      try { termInfo = await fbGet("/academicYear"); if(!termInfo) termInfo={}; await idbPut("termInfo", termInfo); } catch(e){ termInfo = termInfo || (await idbGet("termInfo")) || {}; }
-      try {
-        var att=await fbGet("/attendance/"+profile.index);
-        if(att){
-          var newSig = sig(att);
-          if(prevSig!==null && newSig!==prevSig){ notifyChange(att); }   /* attendance changed -> local notification */
-          lastAtt=att; await idbPut("attendance", att); prevAttSig=newSig;
-        }
-        else { att = lastAtt || await idbGet("attendance"); }
-        renderDash(att);
-        var hasData = att && Object.keys(att).filter(function(k){return k!=="secret";}).length;
-        lastSynced = Date.now();
-        updateFooter();
-        await checkAnnouncements();
-        await checkMessages();
-        setLive(false, hasData ? "Live" : "No data");
-        if(navigator.onLine && hasData) toast("Attendance refreshed");
-      } catch(e){
-        var cached = lastAtt || await idbGet("attendance");
-        renderDash(cached);
-        updateFooter(true);
-        setLive(false, "Offline");
+      var metaAll=await fbGet("/studentsMeta");
+      if(metaAll){
+        var m=metaAll[profile.index];
+        if(m){ profile.level=m.level; profile.semester=m.semester; profile.academicYear=m.academicYear||""; profile.teacherName=m.name||""; await idbPut("profile", profile); renderHero(); }
       }
-    } finally {
-      refreshing=false;
-      if(btn) btn.classList.remove("spin");   /* never leave it spinning */
+    } catch(e){}
+    try { termInfo = await fbGet("/academicYear"); if(!termInfo) termInfo={}; } catch(e){ termInfo = termInfo||{}; }
+    try {
+      var att=await fbGet("/attendance/"+profile.index);
+      if(att){
+        var newSig = sig(att);
+        if(prevSig!==null && newSig!==prevSig){ notifyChange(att); }   /* attendance changed -> local notification */
+        lastAtt=att; await idbPut("attendance", att); prevAttSig=newSig;
+      }
+      else { att = lastAtt || await idbGet("attendance"); }
+      renderDash(att);
+      var hasData = att && Object.keys(att).filter(function(k){return k!=="secret";}).length;
+      lastSynced = Date.now();
+      updateFooter();
+      await checkAnnouncements();
+      await checkMessages();
+      setLive(false, hasData ? "Live" : "No data");
+      if(navigator.onLine && hasData) toast("Attendance refreshed");
+    } catch(e){
+      var cached = lastAtt || await idbGet("attendance");
+      renderDash(cached);
+      updateFooter(true);
+      setLive(false, "Offline");
     }
+    if(btn) btn.classList.remove("spin");
   }
   function updateFooter(offline){
     var el=$("syncFooter"); if(!el) return;
@@ -786,17 +756,12 @@ var app = (function(){
     var courses = Object.keys(att).filter(function(k){ return k!=="secret"; });
     var totalHeld=0, totalP=0, totalA=0, totalE=0, courseStats=[];
     var tw = totalWeeks();
-    function effStatus(wks, code, w){
-      var raw = wks[w];
-      if(raw==="P"||raw==="A"||raw==="E") return raw;
-      return isPastWeek(code, w) ? "A" : "X";   /* past unmarked week = Absent; future = No class */
-    }
     var lowCourses = [];
     courses.forEach(function(c){
       var weeks=att[c]; if(!weeks||typeof weeks!=="object") return;
       var held=0,p=0,a=0,e=0,missed=[],excused=[];
       for(var w=1; w<=tw; w++){
-        var st=effStatus(weeks, c, w);
+        var st=weeks[w];
         if(st==="P"||st==="A"||st==="E"){ held++; if(st==="P")p++; else if(st==="A"){a++;missed.push(w);} else {e++;excused.push(w);} }
       }
       if(held===0) return;
@@ -830,10 +795,14 @@ var app = (function(){
     courseStats.forEach(function(cs){
       var barClass = cs.pct>=75 ? "var(--green)" : cs.pct>=60 ? "var(--gold)" : "var(--red)";
       var pctClass = cs.pct>=75 ? "g" : cs.pct>=60 ? "w" : "r";
-      // compact dot track (all weeks; past unmarked = absent, future = no class)
+      var recorded = Object.keys(cs.weeks).map(function(w){return parseInt(w,10);}).filter(function(w){return !isNaN(w);}).sort(function(a,b){return a-b;});
+      var firstWeek = recorded.length?recorded[0]:1, lastWeek = recorded.length?recorded[recorded.length-1]:tw;
+
+      // compact dot track (recorded range)
       var dots="";
-      for(var w=1; w<=tw; w++){
-        var d=effStatus(weeks, c, w);
+      for(var w=firstWeek; w<=lastWeek; w++){
+        var st=cs.weeks[w];
+        var d = st==="P"?"P": st==="A"?"A": st==="E"?"E":"X";
         dots += '<span class="cdot '+d+'"></span>';
       }
 
@@ -853,11 +822,11 @@ var app = (function(){
       html +=   '<div class="cc-detail'+detailOpen+'" id="cd-'+esc(cs.code)+'"><div class="detail-inner">';
       html +=     '<div class="legend"><span><i style="background:var(--green)"></i>Present</span><span><i style="background:var(--red)"></i>Absent</span><span><i style="background:var(--ash)"></i>Excused</span><span><i style="background:#e9edf2"></i>No class</span></div>';
       for(var w2=1; w2<=tw; w2++){
-        var s2=effStatus(weeks, c, w2);
+        var s2=cs.weeks[w2];
         var cls = s2==="P"?"P": s2==="A"?"A": s2==="E"?"E":"X";
         var label = s2==="P"?"Present": s2==="A"?"Absent": s2==="E"?"Excused":"No class";
-        var start=courseStart(c); var d2=start?weekDate(start,w2):null;
-        html += '<div class="week-row"><div class="wk-badge">Week '+w2+'</div><div class="wk-date">'+esc(fmtDate(d2))+'</div><div class="wk-chip '+cls+'">'+(s2==="X"?"–":s2)+'</div><div class="wk-status '+cls+'">'+label+'</div></div>';
+        var start=courseStart(cs.code); var d2=start?weekDate(start,w2):null;
+        html += '<div class="week-row"><div class="wk-badge">Week '+w2+'</div><div class="wk-date">'+esc(fmtDate(d2))+'</div><div class="wk-chip '+cls+'">'+(s2||"–")+'</div><div class="wk-status '+cls+'">'+label+'</div></div>';
       }
       html +=   '</div></div>';
       html += '</div>';
@@ -1053,7 +1022,6 @@ var app = (function(){
   /* ---------- init ---------- */
   async function init(){
     await idbOpen();
-    termInfo = await idbGet("termInfo") || null;
     // theme
     var th = await idbGet("theme");
     if(th==="dark"){ document.documentElement.setAttribute("data-theme","dark"); }
@@ -1070,7 +1038,7 @@ var app = (function(){
     document.addEventListener("visibilitychange", function(){ if(!document.hidden && profile) refresh(); });
   }
 
-  return { init:init, createPin:createPin, unlock:unlock, forgotPin:forgotPin,
+  return { init:init, createPin:createPin, unlock:unlock, resetApp:resetApp,
            checkIndex:checkIndex, confirmName:confirmName, saveProfile:saveProfile, loadCourses:loadCourses,
            pickPhoto:pickPhoto, changePhoto:changePhoto, refresh:refresh, openMenu:openMenu, closeMenu:closeMenu,
            showAbout:showAbout, startRegister:startRegister, toggleCourse:toggleCourse,
