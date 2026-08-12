@@ -1,4 +1,5 @@
 
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -231,11 +232,12 @@
   .chat-wrap{ flex:1; display:flex; flex-direction:column; min-height:0; }
   .chat-scroll{ flex:1; overflow:auto; padding:14px 16px; background:var(--bg); }
   html[data-theme="dark"] .chat-scroll{ background:#0e1622; }
-  .bubble{ max-width:78%; padding:9px 13px; border-radius:16px; margin-bottom:10px; font-size:.86rem; line-height:1.4; word-wrap:break-word; }
-  .bubble .bm{ display:block; font-size:.66rem; opacity:.7; margin-top:4px; }
-  .b-me{ background:var(--navy); color:#fff; align-self:flex-end; border-bottom-right-radius:5px; }
-  .b-them{ background:var(--card); color:var(--text); align-self:flex-start; border-bottom-left-radius:5px; box-shadow:0 3px 10px rgba(7,32,63,.06); }
-  .b-them .bn{ font-weight:800; font-size:.72rem; color:var(--navy); display:block; margin-bottom:2px; }
+  .bubble{ max-width:80%; padding:10px 14px; border-radius:18px; margin-bottom:12px; font-size:.88rem; line-height:1.45; word-wrap:break-word; box-shadow:0 3px 12px rgba(7,32,63,.08); }
+  .bubble .bm{ display:block; font-size:.62rem; opacity:.65; margin-top:5px; }
+  .b-me{ background:var(--navy); color:#fff; align-self:flex-end; border-bottom-right-radius:6px; }
+  .b-me .bn{ font-weight:800; font-size:.68rem; color:var(--gold); display:block; margin-bottom:3px; letter-spacing:.3px; }
+  .b-them{ background:var(--card); color:var(--text); align-self:flex-start; border-bottom-left-radius:6px; border:1px solid var(--border); }
+  .b-them .bn{ font-weight:800; font-size:.72rem; color:var(--navy); display:block; margin-bottom:3px; }
   .chat-compose{ display:flex; gap:8px; padding:10px 14px calc(10px + env(safe-area-inset-bottom)); background:var(--card); border-top:1px solid var(--border); }
   .chat-compose textarea{ flex:1; border:1.5px solid var(--border); border-radius:12px; padding:10px 12px; font-family:inherit; font-size:.9rem; resize:none; max-height:90px; background:#fbfcfe; color:var(--text); }
   .chat-compose .send{ width:46px; height:46px; border-radius:12px; border:none; background:var(--gold); color:var(--navy); font-size:1.2rem; cursor:pointer; flex:0 0 auto; }
@@ -517,6 +519,16 @@ var app = (function(){
   function weekDate(startISO, weekNum){ var s=new Date(startISO); if(isNaN(s.getTime())) return null; var d=new Date(s); d.setDate(d.getDate()+(weekNum-1)*7); return d; }
   function fmtDate(d){ if(!d||isNaN(d.getTime())) return ""; return d.toLocaleDateString("en-GB",{day:"numeric",month:"short"}); }
   function totalWeeks(){ return (termInfo && termInfo.totalWeeks) ? parseInt(termInfo.totalWeeks,10) : 13; }
+  /* A week is "past" once the whole week (start + 6 days) is before today. */
+  function isPastWeek(code, w){
+    var start = courseStart(code);
+    if(!start) return false;
+    var d = weekDate(start, w);
+    if(!d) return false;
+    var end = new Date(d); end.setDate(end.getDate()+6);
+    var today = new Date(); today.setHours(0,0,0,0);
+    return end < today;
+  }
   function setLive(busy, text){
     var chip=$("liveChip"); if(!chip) return;
     chip.className = "live" + (busy ? " busy" : "");
@@ -762,7 +774,11 @@ var app = (function(){
       var held=0,p=0,a=0,e=0,missed=[],excused=[];
       for(var w=1; w<=tw; w++){
         var st=weeks[w];
-        if(st==="P"||st==="A"||st==="E"){ held++; if(st==="P")p++; else if(st==="A"){a++;missed.push(w);} else {e++;excused.push(w);} }
+        if(st!=="P"&&st!=="A"&&st!=="E"){
+          // An unmarked PAST week is treated as Absent — the class happened but was never recorded.
+          if(isPastWeek(c, w)){ st="A"; } else { continue; }
+        }
+        held++; if(st==="P")p++; else if(st==="A"){a++;missed.push(w);} else {e++;excused.push(w);}
       }
       if(held===0) return;
       totalHeld+=held; totalP+=p; totalA+=a; totalE+=e;
@@ -823,6 +839,7 @@ var app = (function(){
       html +=     '<div class="legend"><span><i style="background:var(--green)"></i>Present</span><span><i style="background:var(--red)"></i>Absent</span><span><i style="background:var(--ash)"></i>Excused</span><span><i style="background:#e9edf2"></i>No class</span></div>';
       for(var w2=1; w2<=tw; w2++){
         var s2=cs.weeks[w2];
+        if(s2!=="P"&&s2!=="A"&&s2!=="E" && isPastWeek(cs.code, w2)){ s2="A"; }
         var cls = s2==="P"?"P": s2==="A"?"A": s2==="E"?"E":"X";
         var label = s2==="P"?"Present": s2==="A"?"Absent": s2==="E"?"Excused":"No class";
         var start=courseStart(cs.code); var d2=start?weekDate(start,w2):null;
@@ -960,7 +977,11 @@ var app = (function(){
   async function checkMessages(){
     try {
       var data = await fbGet("/messages");
-      var arr = normalizeMsg(data).filter(function(m){ return m.fromStudent && String(m.fromStudent)===String(profile.index); });
+      var arr = normalizeMsg(data).filter(function(m){
+        if(m.fromStudent && String(m.fromStudent)===String(profile.index)) return true;
+        if(m.toStudents && m.toStudents.map(String).indexOf(String(profile.index))>=0) return true;
+        return false;
+      });
       if(!arr.length) return;
       var seen = await idbGet("msgSeenTs") || 0;
       var hasNew = arr.some(function(m){ return m.dir==="fromTeacher" && (m.ts||0)>seen; });
@@ -984,7 +1005,12 @@ var app = (function(){
     var sel=$("msgCourseSel"); if(!sel || !sel.value) return;
     msgCourse = sel.value;
     var data = await fbGet("/messages");
-    msgThreads = normalizeMsg(data).filter(function(m){ return m.fromStudent && String(m.fromStudent)===String(profile.index) && cleanCode(m.course)===msgCourse; });
+    msgThreads = normalizeMsg(data).filter(function(m){
+      if(cleanCode(m.course)!==msgCourse) return false;
+      if(m.fromStudent && String(m.fromStudent)===String(profile.index)) return true;
+      if(m.toStudents && m.toStudents.map(String).indexOf(String(profile.index))>=0) return true;
+      return false;
+    });
     renderChat();
   }
   function renderChat(){
@@ -992,10 +1018,12 @@ var app = (function(){
     if(!msgThreads.length){ sc.innerHTML='<div class="empty" style="padding:30px 10px;"><div class="e-sub">No messages yet for this course. Say hello to your instructor below.</div></div>'; markMsgSeen(); return; }
     var html="";
     msgThreads.forEach(function(m){
-      if(String(m.fromStudent)===String(profile.index)){
-        html+='<div class="bubble b-me">'+esc(m.body)+'<span class="bm">'+esc(fmtTime(m.ts))+'</span></div>';
+      var isTeacher = (m.fromTeacher===true) || (m.dir==="fromTeacher");
+      if(isTeacher){
+        var tname = m.by || (profile && profile.teacherName) || "Instructor";
+        html+='<div class="bubble b-them"><span class="bn">'+esc(tname)+'</span>'+esc(m.body)+'<span class="bm">'+esc(fmtTime(m.ts))+'</span></div>';
       } else {
-        html+='<div class="bubble b-them"><span class="bn">'+esc(m.by||"Instructor")+'</span>'+esc(m.body)+'<span class="bm">'+esc(fmtTime(m.ts))+'</span></div>';
+        html+='<div class="bubble b-me"><span class="bn">Me</span>'+esc(m.body)+'<span class="bm">'+esc(fmtTime(m.ts))+'</span></div>';
       }
     });
     sc.innerHTML=html; sc.scrollTop=sc.scrollHeight; markMsgSeen();
