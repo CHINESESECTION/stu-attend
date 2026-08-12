@@ -313,7 +313,7 @@
       <input type="password" id="pinEnter" inputmode="numeric" maxlength="5" placeholder="•••••">
       <div class="err" id="unlockErr"></div>
       <button class="btn btn-blue" onclick="app.unlock()">Unlock</button>
-      <button class="btn btn-ghost" onclick="app.resetApp()">Clear this device</button>
+      <button class="btn btn-ghost" onclick="app.resetApp()">Forgot Pin</button>
     </div></div>
   </div>
 
@@ -422,7 +422,7 @@
     <div class="si">📷</div><div>Change photo</div>
   </div>
   <div class="sheet-item" onclick="app.openNotices()">
-    <div class="si">📌</div><div>Notice Board <span class="badge" id="noticeBadge" style="display:none;">New</span></div>
+    <div class="si">📌</div><div>Announcements <span class="badge" id="noticeBadge" style="display:none;">New</span></div>
   </div>
   <div class="sheet-item" onclick="app.openMessages()">
     <div class="si">💬</div><div>Message Instructor <span class="badge" id="msgBadge" style="display:none;">New</span></div>
@@ -437,7 +437,7 @@
     <div class="si">ℹ️</div><div>About this app</div>
   </div>
   <div class="sheet-item" onclick="app.resetApp(); app.closeMenu();">
-    <div class="si">🗑️</div><div>Clear this device</div>
+    <div class="si">🗑️</div><div>Forgot Pin</div>
   </div>
 </div>
 
@@ -541,7 +541,7 @@ var app = (function(){
     });
   }
   function resetApp(){
-    if(confirm("Clear this device? This removes your PIN and profile from this phone only. Your attendance stays safe in the teacher system.")){
+    if(confirm("Forgot Pin? This removes your PIN and profile from this phone only. Your attendance stays safe in the teacher system.")){
       idbPut("pin", null).then(function(){ return idbPut("profile", null); }).then(function(){ show("scr-pinsetup"); });
     }
   }
@@ -932,7 +932,7 @@ var app = (function(){
   function renderNotices(data){
     var box=$("noticeList");
     var arr = normalizeAnn(data).filter(annVisible);
-    if(!arr.length){ box.innerHTML='<div class="empty" style="padding:30px 10px;"><div class="e-sub">No notices yet.</div></div>'; return; }
+    if(!arr.length){ box.innerHTML='<div class="empty" style="padding:30px 10px;"><div class="e-sub">No announcements yet.</div></div>'; return; }
     var html="";
     arr.forEach(function(n){
       html += '<div class="notice-item"><div class="nt">'+esc(annTitle(n))+'</div>';
