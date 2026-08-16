@@ -11,7 +11,7 @@
 <meta name="apple-mobile-web-app-title" content="UG Pass">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon.svg">
-<title>UG Attendance Pass — University of Ghana</title>
+<title>Class Attendance</title>
 <script src="CHISAG_MASTER_NAMES.js"></script>
 <style>
   :root{
@@ -782,12 +782,12 @@ var app = (function(){
       }
       if(held===0) return;
       totalHeld+=held; totalP+=p; totalA+=a; totalE+=e;
-      var pct = Math.round((p/held)*100);
+      var pct = Math.round(((p+e)/held)*100);   // excused counts as present
       if(pct<60 && held>=3) lowCourses.push({code:c, pct:pct});
       courseStats.push({ code:c, held:held, p:p, a:a, e:e, pct:pct, missed:missed, excused:excused, weeks:weeks });
     });
     courseStats.sort(function(x,y){ return x.code.localeCompare(y.code); });
-    var overallPct = totalHeld ? Math.round((totalP/totalHeld)*100) : 0;
+    var overallPct = totalHeld ? Math.round(((totalP+totalE)/totalHeld)*100) : 0;   // excused counts as present
 
     // ---- ring ----
     $("ringCard").innerHTML = ringCardHTML(overallPct, totalHeld, totalP, totalA, totalE);
@@ -864,7 +864,7 @@ var app = (function(){
     if(!on) return;
     if(!('Notification' in window) || Notification.permission!=="granted") return;
     var present=0, total=0;
-    Object.keys(att).forEach(function(c){ var w=att[c]; if(w&&typeof w==="object"){ Object.keys(w).forEach(function(k){ if(w[k]==="P"||w[k]==="A"||w[k]==="E"){ total++; if(w[k]==="P")present++; } }); } });
+    Object.keys(att).forEach(function(c){ var w=att[c]; if(w&&typeof w==="object"){ Object.keys(w).forEach(function(k){ if(w[k]==="P"||w[k]==="A"||w[k]==="E"){ total++; if(w[k]==="P"||w[k]==="E")present++; } }); } });
     try{ new Notification("UG Attendance Pass", { body:"Your attendance was updated — "+present+" present of "+total+" recorded classes.", icon:"icon.svg" }); }catch(e){}
   }
   async function toggleNotify(){
