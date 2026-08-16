@@ -1,4 +1,4 @@
-/* UG Attendance Pass — Service Worker
+/* Class Attendance — Service Worker
    Caches the app shell so the portal opens instantly and works offline.
    Attendance data is always read live from Firebase (never cached). */
 
