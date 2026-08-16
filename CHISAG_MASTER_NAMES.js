@@ -1372,4 +1372,13 @@ window.MASTER_NAMES = {
   "22494381": { s: "MENSAH", o: "JACOB NATHANIEL", l: "200" },
   "22494747": { s: "MOHAMMED", o: "FUAD", l: "200" },
   "22495114": { s: "ESHUN", o: "GIFTY", l: "200" },
+  "10667900": { s: "ZORVE", o: "Promise", l: "ALUMNI" },
+  "10678745": { s: "BENTIL", o: "Raymond", l: "ALUMNI" },
+  "10869351": { s: "KUWORNU", o: "Emmanuella Enam", l: "ALUMNI" },
+  "10956525": { s: "AFFUL", o: "Philip Nana Kwame Elizer", l: "ALUMNI" },
+  "10961567": { s: "ADARKWAH", o: "Kingsley", l: "ALUMNI" },
+  "10962133": { s: "NUKUNU", o: "Jennifer", l: "ALUMNI" },
+  "10976160": { s: "OKAI", o: "Josephine Adwoa", l: "ALUMNI" },
+  "10983256": { s: "OSEI", o: "Angel Gabriella", l: "ALUMNI" },
+  "10888862": { s: "ACQUAH", o: "Ekua Nyarkoah", l: "ALUMNI" },
 };
