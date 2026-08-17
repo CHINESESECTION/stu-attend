@@ -508,17 +508,45 @@ var app = (function(){
   }
   function displayCourse(code){ return esc(String(code).replace(/S\d+$/i,"").replace(/([A-Za-z]+)(\d+)/, "$1 $2")); }
   function levelFromCode(c){ var n=parseInt((String(c).split(" ")[1]||"0"),10); return Math.floor(n/100)*100; }
+  /* The number of weeks and each week's date come DIRECTLY from the teacher's
+     system (the /academicYear node the teacher pushes to Firebase). The student
+     NEVER adds weeks of its own and NEVER invents a calendar — whatever the
+     teacher set is the final total. */
+  /* Normalize a teacher start date to a clean MONDAY at 00:00. The teacher can
+     accidentally save a full timestamp (e.g. "right now" with the current time
+     of day); we strip the time and snap to the Monday of that week so the
+     student never shows "today's time" or a mid-week start as Week 1. */
+  function normalizeStart(iso){
+    if(!iso) return null;
+    var d = new Date(iso);
+    if(isNaN(d.getTime())) return null;
+    d.setHours(0,0,0,0);
+    var dow = d.getDay();                 // 0=Sun..6=Sat
+    var back = (dow === 0) ? 6 : (dow - 1); // days since Monday
+    d.setDate(d.getDate() - back);
+    return d;
+  }
   function courseStart(code){
     if(!termInfo) return null;
     var clean = String(code).replace(/\s/g,"");
     var dates = termInfo.courseDates || {};
-    if(dates[code]) return dates[code];
-    var key = Object.keys(dates).find(function(k){ return String(k).replace(/\s/g,"") === clean; });
-    return key ? dates[key] : (termInfo.startDate || null);
+    var raw = dates[code];
+    if(!raw){
+      var key = Object.keys(dates).find(function(k){ return String(k).replace(/\s/g,"") === clean; });
+      if(key) raw = dates[key];
+    }
+    if(!raw) raw = termInfo.startDate;
+    return normalizeStart(raw);   // anchored to the teacher's Monday start
   }
-  function weekDate(startISO, weekNum){ var s=new Date(startISO); if(isNaN(s.getTime())) return null; var d=new Date(s); d.setDate(d.getDate()+(weekNum-1)*7); return d; }
+  function weekDate(startDate, weekNum){ if(!startDate) return null; var d=new Date(startDate.getTime()); d.setDate(d.getDate()+(weekNum-1)*7); return d; }
   function fmtDate(d){ if(!d||isNaN(d.getTime())) return ""; return d.toLocaleDateString("en-GB",{day:"numeric",month:"short"}); }
-  function totalWeeks(){ return (termInfo && termInfo.totalWeeks) ? parseInt(termInfo.totalWeeks,10) : 13; }
+  function totalWeeks(){
+    // STRICTLY the teacher's published number of weeks. Zero inventing.
+    if(termInfo && termInfo.totalWeeks){ var tw=parseInt(termInfo.totalWeeks,10); if(tw>0) return tw; }
+    // No teacher calendar published -> 0 weeks (the dashboard shows a clear
+    // "calendar not published yet" notice instead of fake weeks).
+    return 0;
+  }
   /* A week is "past" once the whole week (start + 6 days) is before today. */
   function isPastWeek(code, w){
     var start = courseStart(code);
@@ -690,7 +718,18 @@ var app = (function(){
         if(m){ profile.level=m.level; profile.semester=m.semester; profile.academicYear=m.academicYear||""; profile.teacherName=m.name||""; await idbPut("profile", profile); renderHero(); }
       }
     } catch(e){}
-    try { termInfo = await fbGet("/academicYear"); if(!termInfo) termInfo={}; } catch(e){ termInfo = termInfo||{}; }
+    /* Weeks + dates: pull the teacher's /academicYear. On success, save it on this
+       device. On failure/offline, fall back to the last saved copy so the number of
+       weeks and the week dates ALWAYS reflect the teacher's system, never a guess. */
+    try {
+      var ay = await fbGet("/academicYear");
+      if(ay && (ay.totalWeeks || ay.startDate || ay.courseDates)){
+        termInfo = ay;
+        try { await idbPut("termInfo", ay); } catch(e){}
+      } else {
+        termInfo = termInfo || (await idbGet("termInfo")) || {};
+      }
+    } catch(e){ termInfo = termInfo || (await idbGet("termInfo")) || {}; }
     try {
       var att=await fbGet("/attendance/"+profile.index);
       if(att){
@@ -768,16 +807,28 @@ var app = (function(){
     var courses = Object.keys(att).filter(function(k){ return k!=="secret"; });
     var totalHeld=0, totalP=0, totalA=0, totalE=0, courseStats=[];
     var tw = totalWeeks();
+    if(!tw){
+      // The teacher has not published an academic calendar yet. Show a clear
+      // notice instead of inventing weeks of our own.
+      cl.innerHTML = '<div class="empty"><div class="e-emoji">🗓️</div>'+
+        '<div class="e-title">Academic calendar not published</div>'+
+        '<div class="e-sub">Your lecturer hasn\'t set the number of weeks / start date yet. '+
+        'Once they publish it from the Class Attendance system, your weekly schedule will appear here '+
+        'exactly as they set it.</div></div>';
+      cc.innerText="";
+      return;
+    }
     var lowCourses = [];
     courses.forEach(function(c){
       var weeks=att[c]; if(!weeks||typeof weeks!=="object") return;
       var held=0,p=0,a=0,e=0,missed=[],excused=[];
       for(var w=1; w<=tw; w++){
         var st=weeks[w];
-        if(st!=="P"&&st!=="A"&&st!=="E"){
-          // An unmarked PAST week is treated as Absent — the class happened but was never recorded.
-          if(isPastWeek(c, w)){ st="A"; } else { continue; }
-        }
+        // ONLY graded weeks (P/A/E) count. A week the teacher has NOT graded is
+        // "No class" — it is neither held nor marked absent, so it never counts
+        // against the student. (Previously ungraded past weeks were force-counted
+        // as Absent, which produced phantom weeks like a wrongly-marked Week 13.)
+        if(st!=="P"&&st!=="A"&&st!=="E"){ continue; }
         held++; if(st==="P")p++; else if(st==="A"){a++;missed.push(w);} else {e++;excused.push(w);}
       }
       if(held===0) return;
@@ -839,11 +890,14 @@ var app = (function(){
       html +=     '<div class="legend"><span><i style="background:var(--green)"></i>Present</span><span><i style="background:var(--red)"></i>Absent</span><span><i style="background:var(--ash)"></i>Excused</span><span><i style="background:#e9edf2"></i>No class</span></div>';
       for(var w2=1; w2<=tw; w2++){
         var s2=cs.weeks[w2];
-        if(s2!=="P"&&s2!=="A"&&s2!=="E" && isPastWeek(cs.code, w2)){ s2="A"; }
+        // An ungraded week is "No class" (never Absent) — the teacher simply has
+        // not graded that week, so it must not count as a class the student missed.
         var cls = s2==="P"?"P": s2==="A"?"A": s2==="E"?"E":"X";
         var label = s2==="P"?"Present": s2==="A"?"Absent": s2==="E"?"Excused":"No class";
         var start=courseStart(cs.code); var d2=start?weekDate(start,w2):null;
-        html += '<div class="week-row"><div class="wk-badge">Week '+w2+'</div><div class="wk-date">'+esc(fmtDate(d2))+'</div><div class="wk-chip '+cls+'">'+(s2||"–")+'</div><div class="wk-status '+cls+'">'+label+'</div></div>';
+        // Dates are taken exactly from the teacher system's courseDates / startDate.
+        var dateTxt = start ? esc(fmtDate(d2)) : "…";  /* "…" = teacher hasn't synced the calendar for this course yet */
+        html += '<div class="week-row"><div class="wk-badge">Week '+w2+'</div><div class="wk-date">'+dateTxt+'</div><div class="wk-chip '+cls+'">'+(s2||"–")+'</div><div class="wk-status '+cls+'">'+label+'</div></div>';
       }
       html +=   '</div></div>';
       html += '</div>';
@@ -1050,6 +1104,9 @@ var app = (function(){
   /* ---------- init ---------- */
   async function init(){
     await idbOpen();
+    // Restore the teacher's week calendar (weeks + dates) from the last successful
+    // sync so it is available immediately, even before the first network refresh.
+    try { var savedTerm = await idbGet("termInfo"); if(savedTerm) termInfo = savedTerm; } catch(e){}
     // theme
     var th = await idbGet("theme");
     if(th==="dark"){ document.documentElement.setAttribute("data-theme","dark"); }
